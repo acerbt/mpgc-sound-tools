@@ -6,7 +6,7 @@
 #include "serialize.h"
 
 //Replace this with your path to amuseconv
-#define PATH_TO_AMUSECONV "amuse-2018_09_08-win64\\amuseconv.exe"
+#define PATH_TO_AMUSECONV "amuseconv"  //Set this to the full path to your amuseconv binary
 
 int main(int argc, char ** argv) {
 	//Open MSM file and get chunk info
@@ -48,6 +48,9 @@ int main(int argc, char ** argv) {
 		uint32_t extraOff = read_u32_be(fp);
 		fseek(fp,chk5Offs+CMPgrpOffs+SNGgrpOffs+extraOff,SEEK_SET);
 		fread(buf,1,SNGgrpSize,fp);
+		FILE * mapOut = fopen("sng_to_group_map.txt","a");
+		fprintf(mapOut,"%04X %04X\n",i,SNGgrpId);
+		fclose(mapOut);
 		char fname[0x100];
 		snprintf(fname,0x100,"%04X.sng",i);
 		FILE * out = fopen(fname,"wb");
