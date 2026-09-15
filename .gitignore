@@ -1,0 +1,11 @@
+# Compiled binaries
+dump_pdt
+dump_msm
+dump_msm_sng
+bank2sf2
+
+# Build helper/patch scripts
+*.py
+
+# sf2cute build artifacts (submodule build output)
+sf2cute/build/

@@ -82,6 +82,7 @@ void macro_to_instrument(uint16_t id) {
 	fseek(fpPool,macroOffs,SEEK_SET);
 	//Find this macro
 	while(true) {
+		if(feof(fpPool)) return;
 		uint32_t macroSize = read_u32_be(fpPool);
 		uint16_t macroID = read_u16_be(fpPool);
 		fseek(fpPool,2,SEEK_CUR);
@@ -98,6 +99,7 @@ void macro_to_instrument(uint16_t id) {
 			//int32_t modKeyDec = 0;
 			//Process macro commands
 			while(true) {
+				if(feof(fpPool)) break;
 				uint8_t param1 = read_u8_be(fpPool);
 				uint8_t param2 = read_u8_be(fpPool);
 				uint8_t param3 = read_u8_be(fpPool);
@@ -115,6 +117,7 @@ void macro_to_instrument(uint16_t id) {
 					fseek(fpPool,tableOffs,SEEK_SET);
 					//Find this table
 					while(true) {
+						if(feof(fpPool)) break;
 						uint32_t tableSize = read_u32_be(fpPool);
 						uint16_t tableID = read_u16_be(fpPool);
 						fseek(fpPool,2,SEEK_CUR);
@@ -158,22 +161,55 @@ void macro_to_instrument(uint16_t id) {
 				char strBuf[0x100];
 				snprintf(strBuf,0x100,"%s/sample%04X.wav",samplesDir,sampleID);
 				FILE * fpWave = fopen(strBuf,"rb");
+				if(fpWave==nullptr) {
+					// Sample not found in this group's local directory.
+					// MusyX groups can share sample data across groups -- a song group's pool
+					// may reference sample IDs that physically live in a separate "common" or
+					// "preload" group's sample directory. This was confirmed during debugging
+					// by adding a temporary fprintf trace (logging fourcc/chkSize/waveSize for
+					// a specific missing sample ID), which showed the WAV parser running
+					// correctly on a real 9KB file located in a different group's folder --
+					// confirming cross-group reference rather than a parsing bug. The search
+					// below handles this by looking for the sample in any sibling group folder.
+					// Note: bank2sf2 must be run from the parent directory containing all
+					// group subdirectories for this fallback to work correctly.
+					//Sample not found locally, search other group folders (shared sample pools)
+					char searchCmd[0x100];
+					snprintf(searchCmd,0x100,"find . -maxdepth 2 -name 'sample%04X.wav' 2>/dev/null | head -1",sampleID);
+					FILE * findPipe = popen(searchCmd,"r");
+					if(findPipe!=nullptr) {
+						char foundPath[0x100] = {0};
+						if(fgets(foundPath,0x100,findPipe)!=nullptr) {
+							size_t len = strlen(foundPath);
+							while(len>0 && (foundPath[len-1]=='\n' || foundPath[len-1]=='\r')) {
+								foundPath[len-1] = 0;
+								len--;
+							}
+							if(len>0) {
+								strncpy(strBuf,foundPath,0x100);
+								fpWave = fopen(strBuf,"rb");
+							}
+						}
+						pclose(findPipe);
+					}
+				}
+				uint32_t sampleRate = 32000;
+				uint32_t loopStart = 0;
+				uint32_t loopEnd = 0;
+				uint8_t rootKey = 60;
+				uint8_t detune = 0;
+				if(fpWave!=nullptr) {
 				
 				fseek(fpWave,0x4,SEEK_CUR);
 				int32_t waveSize = read_u32_le(fpWave)-4;
 				fseek(fpWave,0x4,SEEK_CUR);
 				
 				//std::vector<int16_t> sampleData;
-				uint32_t sampleRate = 32000;
-				uint32_t loopStart = 0;
-				uint32_t loopEnd = 0;
-				uint8_t rootKey = 60;
-				uint8_t detune = 0;
 				sampleLoopModes[sampleID] = (uint16_t)SampleMode::kNoLoop;
 				while(waveSize>0) {
 					uint32_t fourcc = read_u32_be(fpWave);
 					int32_t chkSize = read_u32_le(fpWave);
-					//"fmt "
+						//"fmt "
 					if(fourcc==0x666D7420) {
 						uint16_t wFormatTag = read_u16_le(fpWave);
 						uint16_t wChannels = read_u16_le(fpWave);
@@ -222,7 +258,8 @@ void macro_to_instrument(uint16_t id) {
 					}
 					waveSize -= (chkSize+8);
 				}
-				fclose(fpWave);
+				}
+				if(fpWave!=nullptr) fclose(fpWave);
 				//Add sample
 				snprintf(strBuf,0x100,"sample%04X",sampleID);
 				std::shared_ptr<SFSample> sample = sf2.NewSample(strBuf,
@@ -236,6 +273,7 @@ void macro_to_instrument(uint16_t id) {
 			//Add instrument
 			char strBuf[0x100];
 			snprintf(strBuf,0x100,"macro%04X",id);
+			if(usedSamples[sampleID]!=nullptr) {
 			SFInstrumentZone zone(usedSamples[sampleID],
 				std::vector<SFGeneratorItem>{
 					SFGeneratorItem(SFGenerator::kSampleModes,sampleLoopModes[sampleID]),
@@ -252,6 +290,9 @@ void macro_to_instrument(uint16_t id) {
 			usedMacros[id] = instrument;
 			//Exit
 			return;
+			} else {
+				return;
+			}
 		}
 		//Check next
 		else fseek(fpPool,macroSize-8,SEEK_CUR);
@@ -300,6 +341,7 @@ int main(int argc, char ** argv) {
 		
 		//Main loop
 		while(true) {
+			if(feof(fpProj)) break;
 			uint16_t objectID = read_u16_be(fpProj);
 			fseek(fpProj,2,SEEK_CUR);
 			uint8_t programNo = read_u8_be(fpProj);
@@ -311,6 +353,7 @@ int main(int argc, char ** argv) {
 				fseek(fpPool,layerOffs,SEEK_SET);
 				//Find this layer
 				while(true) {
+					if(feof(fpPool)) break;
 					uint32_t layerSize = read_u32_be(fpPool);
 					uint16_t layerID = read_u16_be(fpPool);
 					fseek(fpPool,2,SEEK_CUR);
@@ -333,6 +376,7 @@ int main(int argc, char ** argv) {
 							//Object ID could be anything (?)
 							//In practice it's always a macro though
 							macro_to_instrument(objectID2);
+						if(usedMacros[objectID2]!=nullptr) {
 							SFPresetZone thiszone(usedMacros[objectID2],
 								std::vector<SFGeneratorItem>{
 									SFGeneratorItem(SFGenerator::kKeyRange,RangesType(keyLo,keyHi)),
@@ -341,6 +385,7 @@ int main(int argc, char ** argv) {
 									SFGeneratorItem(SFGenerator::kPan,pan_range(pan))},
 								std::vector<SFModulatorItem>{});
 							zones.push_back(thiszone);
+						}
 							fseek(fpPool,saveOffs,SEEK_SET);
 						}
 						//Add instrument
@@ -358,6 +403,7 @@ int main(int argc, char ** argv) {
 				fseek(fpPool,keymapOffs,SEEK_SET);
 				//Find this keymap
 				while(true) {
+					if(feof(fpPool)) break;
 					uint32_t keymapSize = read_u32_be(fpPool);
 					uint16_t keymapID = read_u16_be(fpPool);
 					fseek(fpPool,2,SEEK_CUR);
@@ -377,6 +423,7 @@ int main(int argc, char ** argv) {
 							//Object ID could be anything (?)
 							//In practice it's always a macro though
 							macro_to_instrument(objectID2);
+						if(usedMacros[objectID2]!=nullptr) {
 							SFPresetZone thiszone(usedMacros[objectID2],
 								std::vector<SFGeneratorItem>{
 									SFGeneratorItem(SFGenerator::kKeyRange,RangesType(j,j)),
@@ -384,6 +431,7 @@ int main(int argc, char ** argv) {
 									SFGeneratorItem(SFGenerator::kPan,pan_range(pan))},
 								std::vector<SFModulatorItem>{});
 							zones.push_back(thiszone);
+						}
 							fseek(fpPool,saveOffs,SEEK_SET);
 						}
 						//Add instrument
@@ -398,17 +446,19 @@ int main(int argc, char ** argv) {
 			}
 			//Macro
 			else {
-				//Init instrument
-				std::vector<SFPresetZone> zones;
 				//Setup macro
 				macro_to_instrument(objectID);
-				SFPresetZone zone(usedMacros[objectID],
-					std::vector<SFGeneratorItem>{},
-					std::vector<SFModulatorItem>{});
-				//Add instrument
-				char strBuf[0x100];
-				snprintf(strBuf,0x100,"macro%04X",objectID);
-				std::shared_ptr<SFPreset> preset = sf2.NewPreset(strBuf,programNo,i?128:0,std::vector<SFPresetZone>{zone});
+				if(usedMacros[objectID]!=nullptr) {
+					//Init instrument
+					std::vector<SFPresetZone> zones;
+					SFPresetZone zone(usedMacros[objectID],
+						std::vector<SFGeneratorItem>{},
+						std::vector<SFModulatorItem>{});
+					//Add instrument
+					char strBuf[0x100];
+					snprintf(strBuf,0x100,"macro%04X",objectID);
+					std::shared_ptr<SFPreset> preset = sf2.NewPreset(strBuf,programNo,i?128:0,std::vector<SFPresetZone>{zone});
+				}
 			}
 		}
 	}
